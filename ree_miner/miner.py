@@ -66,7 +66,7 @@ METAL_CODES = {
 
 BINDING_CUTOFF_ANGSTROM = 3.5   # coordination distance threshold
 MAX_RESOLUTION = 3.0            # Å — matching ESM-Bind training criteria
-RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v1/query"
+RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 RCSB_DATA_URL   = "https://data.rcsb.org/rest/v1/core/entry"
 RCSB_FILE_URL   = "https://files.rcsb.org/download"
 REQUEST_PAUSE   = 0.1           # polite delay between RCSB requests (seconds)
@@ -95,8 +95,14 @@ NEGATIVE_SEEDS = {"1H4I", "1W6S", "1GGZ"}   # labeled negatives from literature
 
 def build_metal_search_query(metal_codes: list[str], max_rows: int = 5000) -> dict:
     """
-    Build RCSB Search API v1 JSON query for structures containing any of the
+    Build RCSB Search API v2 JSON query for structures containing any of the
     specified metal CCD codes bound to polymer (protein) chains.
+
+    API v2 changes vs v1:
+      - URL:      /rcsbsearch/v2/query
+      - operator: "exact_match" (replaces deprecated "equals")
+      - "negation" field removed from terminal nodes
+      - "results_content_type" removed from request_options
     """
     metal_nodes = [
         {
@@ -104,8 +110,7 @@ def build_metal_search_query(metal_codes: list[str], max_rows: int = 5000) -> di
             "service": "text",
             "parameters": {
                 "attribute": "rcsb_nonpolymer_entity.comp_id",
-                "operator": "equals",
-                "negation": False,
+                "operator": "exact_match",
                 "value": code,
             },
         }
@@ -121,7 +126,6 @@ def build_metal_search_query(metal_codes: list[str], max_rows: int = 5000) -> di
         "return_type": "entry",
         "request_options": {
             "paginate": {"start": 0, "rows": max_rows},
-            "results_content_type": ["experimental"],
             "sort": [{"sort_by": "score", "direction": "descending"}],
         },
     }
@@ -455,6 +459,27 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def main() -> int:
+    contacts_df, seqs_df, summary = mine_all_ree_structures()
+
+    print("\n" + "=" * 60)
+    print("MINING COMPLETE")
+    print("=" * 60)
+    if not contacts_df.empty:
+        print(f"\nMetals found: {contacts_df['metal_code'].value_counts().to_dict()}")
+        print(f"\nBinding residue frequency:")
+        print(contacts_df["binding_residue_1l"].value_counts().head(10))
+        print(f"\nCoordination number distribution:")
+        print(contacts_df["coordination_number"].describe())
+    if not summary.empty:
+        print(f"\nTop PDB entries by binding residue count:")
+        print(summary.nlargest(10, "n_binding_residues")[
+            ["pdb_id", "metal_name", "n_binding_residues",
+             "unique_binding_residues", "avg_coordination_number", "resolution"]
+        ].to_string(index=False))
+    return 0
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="REE PDB Miner")
