@@ -49,9 +49,9 @@ dev = [
 ree-miner = "ree_miner.cli:main"
 
 [project.urls]
-Homepage      = "https://github.com/ramanathana/ree-miner"
-Documentation = "https://github.com/ramanathana/ree-miner#readme"
-"Bug Tracker" = "https://github.com/ramanathana/ree-miner/issues"
+Homepage      = "https://github.com/acadev/ree-miner"
+Documentation = "https://github.com/acadev/ree-miner#readme"
+"Bug Tracker" = "https://github.com/acadev/ree-miner/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

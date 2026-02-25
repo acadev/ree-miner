@@ -109,12 +109,13 @@ def build_metal_search_query(metal_codes: list[str], max_rows: int = 5000) -> di
             "type": "terminal",
             "service": "text",
             "parameters": {
-                "attribute": "rcsb_nonpolymer_entity.comp_id",
+                "attribute": "rcsb_nonpolymer_entity_container_identifiers.nonpolymer_comp_id",
                 "operator": "exact_match",
                 "value": code,
             },
+            "node_id": i,   # required for terminal nodes inside a group
         }
-        for code in metal_codes
+        for i, code in enumerate(metal_codes)
     ]
 
     return {
@@ -126,7 +127,7 @@ def build_metal_search_query(metal_codes: list[str], max_rows: int = 5000) -> di
         "return_type": "entry",
         "request_options": {
             "paginate": {"start": 0, "rows": max_rows},
-            "sort": [{"sort_by": "score", "direction": "descending"}],
+            # "sort" omitted: score-based sort is invalid for exact-match attributes
         },
     }
 
@@ -309,16 +310,21 @@ def extract_chain_sequences(cif_path: Path) -> dict[str, str]:
     try:
         st = gemmi.read_structure(str(cif_path))
         st.setup_entities()
-        for entity in st.entities:
-            if entity.entity_type == gemmi.EntityType.Polymer:
-                if entity.polymer_type in (
+        for chain in st[0]:
+            for subchain in chain.subchains():
+                entity = st.get_entity_of(subchain)
+                if entity is None:
+                    continue
+                if entity.entity_type != gemmi.EntityType.Polymer:
+                    continue
+                if entity.polymer_type not in (
                     gemmi.PolymerType.PeptideL,
                     gemmi.PolymerType.PeptideD,
                 ):
-                    seq_1l = gemmi.one_letter_code(entity.full_sequence)
-                    for chain in st[0]:
-                        if chain.get_entity_name() == entity.name:
-                            seqs[chain.name] = seq_1l
+                    continue
+                seq_1l = gemmi.one_letter_code(entity.full_sequence)
+                seqs[chain.name] = seq_1l
+                break  # one protein subchain per auth-chain is sufficient
     except Exception as e:
         log.warning(f"Sequence extraction failed for {cif_path.stem}: {e}")
     return seqs
