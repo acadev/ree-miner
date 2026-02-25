@@ -460,6 +460,27 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def main() -> int:
+    contacts_df, seqs_df, summary = mine_all_ree_structures()
+
+    print("\n" + "=" * 60)
+    print("MINING COMPLETE")
+    print("=" * 60)
+    if not contacts_df.empty:
+        print(f"\nMetals found: {contacts_df['metal_code'].value_counts().to_dict()}")
+        print(f"\nBinding residue frequency:")
+        print(contacts_df["binding_residue_1l"].value_counts().head(10))
+        print(f"\nCoordination number distribution:")
+        print(contacts_df["coordination_number"].describe())
+    if not summary.empty:
+        print(f"\nTop PDB entries by binding residue count:")
+        print(summary.nlargest(10, "n_binding_residues")[
+            ["pdb_id", "metal_name", "n_binding_residues",
+             "unique_binding_residues", "avg_coordination_number", "resolution"]
+        ].to_string(index=False))
+    return 0
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="REE PDB Miner")
     parser.add_argument("--test", action="store_true",
