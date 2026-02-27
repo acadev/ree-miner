@@ -18,6 +18,8 @@ Tests:
   T11 Prosthetic group catalog — completeness, Ln³⁺ ratings, seed coverage
   T12 New architecture motifs — C2 Asp-cluster, Annexin GXGT, Gla, Cadherin
   T13 Logan metagenomic pipeline — HMM build, ORF prediction, HMM search, SLURM
+  T14 Functional annotation — taxonomy, eggNOG parsing, neighborhood analysis,
+      archaeal prioritization, annotated training entry export
 
 Run with:
     python 05_test_pipeline.py
@@ -56,6 +58,7 @@ _MODULE_MAP = {
     "03_homolog_finder.py":          "ree_miner.homologs",
     "04_dataset_builder.py":         "ree_miner.datasets",
     "06_efhand_engineering.py":      "ree_miner.engineering",
+    "functional_annotation.py":      "ree_miner.functional_annotation",
     "07_cofactor_architectures.py":  "ree_miner.cofactors",
     "08_metagenomic_search.py":      "ree_miner.metagenomic",
 }
@@ -1036,6 +1039,33 @@ def t13_metagenomic_search() -> bool:
     return True
 
 
+def t14_functional_annotation() -> bool:
+    """
+    T14 — Functional annotation module (offline self-test)
+
+    Delegates to functional_annotation.run_offline_annotation_test() which
+    exercises sub-tests T14a–T14f without any network calls:
+      T14a  Thermophile / acidophile keyword classification
+      T14b  eggNOG TSV parser with synthetic annotation table
+      T14c  Genomic neighborhood analysis (graceful degradation without HMMs)
+      T14d  annotate_hits_dataframe() with eggnog_mode='skip' (offline)
+      T14e  Archaeal hit prioritization and sorting
+      T14f  Annotated training entry export format
+    """
+    fa = load_module("functional_annotation.py")
+    results = fa.run_offline_annotation_test()
+
+    for p in results["passed"]:
+        print(f"    ✓ {p}")
+    for f in results["failed"]:
+        print(f"    ✗ {f}")
+
+    assert not results["failed"], (
+        f"{len(results['failed'])} sub-tests failed: {results['failed']}"
+    )
+    return True
+
+
 def run_test(name: str, fn, *args, **kwargs):
     print(f"\n{'─'*60}")
     print(f"  {name}")
@@ -1076,6 +1106,7 @@ def main():
         ("T11 Prosthetic group catalog + Ln³⁺ ratings",  t11_prosthetic_group_catalog),
         ("T12 New arch motifs (C2/Annexin/Gla/Cadherin)", t12_new_architecture_motifs),
         ("T13 Logan metagenomic search (HMM/ORF/SLURM)",  t13_metagenomic_search),
+        ("T14 Functional annotation (taxonomy/eggNOG/neighborhood)", t14_functional_annotation),
     ]
 
     results = {}
@@ -1117,6 +1148,8 @@ def main():
         print("    ree-miner scan --mode build-hmms               # download Pfam HMMs")
         print("    ree-miner scan --mode generate-slurm           # HPC SLURM scripts")
         print("    ree-miner build-dataset                        # cluster, label, export")
+        print("    ree-miner annotate --eggnog-mode web           # taxonomy + eggNOG + neighborhood")
+        print("    ree-miner annotate --archaeal-only             # print archaeal hit summary")
     else:
         print(f"\n  {failed} test(s) FAILED — see output above.")
 
