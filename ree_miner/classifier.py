@@ -442,7 +442,7 @@ def plot_fold_diversity(df: pd.DataFrame, out_path: Path = FIG_DIR / "fold_diver
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+def main() -> int:
     result_df = classify_all_structures()
     if not result_df.empty:
         plot_fold_diversity(result_df)
@@ -451,3 +451,8 @@ if __name__ == "__main__":
             ["pdb_id", "architecture_class", "cath_id", "superfamily_name",
              "is_ef_hand", "is_novel_arch"]
         ].sort_values("architecture_class").to_string(index=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
