@@ -897,6 +897,17 @@ def run_efhand_engineering(use_offline: bool = False) -> dict:
 # STANDALONE ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
+def main() -> int:
+    results = run_efhand_engineering(use_offline=False)
+    loop_df = results["loop_df"]
+    if not loop_df.empty:
+        print("\n── Top EF-hand Loops by Engineering Score ─────────────")
+        print(loop_df[["protein_name", "organism", "loop_seq", "pos2_aa",
+                        "is_ree_selective", "total_engineering_score",
+                        "hamming_to_lanm"]].head(15).to_string(index=False))
+    return 0
+
+
 if __name__ == "__main__":
     import argparse
 

@@ -635,7 +635,7 @@ def run_cofactor_pipeline() -> dict:
     }
 
 
-if __name__ == "__main__":
+def main() -> int:
     results = run_cofactor_pipeline()
     print(f"\nTotal prosthetic groups assessed: {len(results['catalog'])}")
     print(f"  Direct Ln3+ cofactors:   {results['n_direct']}")
@@ -643,3 +643,8 @@ if __name__ == "__main__":
     print(f"  No Ln3+ potential:       {results['n_none']}")
     print(f"\nNew PDB seeds added:     {len(NEW_ARCHITECTURE_SEEDS)}")
     print(f"New UniProt queries:     {len(NEW_ARCHITECTURE_QUERIES)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

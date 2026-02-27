@@ -533,7 +533,7 @@ def build_training_dataset() -> pd.DataFrame:
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+def main() -> int:
     dataset = build_training_dataset()
     if not dataset.empty:
         print("\nFinal training dataset preview:")
@@ -542,3 +542,8 @@ if __name__ == "__main__":
                                      "lree_selective", "acid_stable", "source"]
                         if c in dataset.columns]
         print(dataset[display_cols].head(20).to_string(index=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

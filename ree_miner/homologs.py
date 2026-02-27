@@ -592,6 +592,14 @@ def combine_homologs(*dfs: pd.DataFrame) -> pd.DataFrame:
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def main() -> int:
+    df_A = run_strategy_A()
+    df_B = run_strategy_B(df_A)
+    df_C = run_strategy_C()
+    combine_homologs(df_A, df_B, df_C)
+    return 0
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="REE Homolog Finder")
     parser.add_argument("--strategy", default="all",
@@ -613,4 +621,4 @@ if __name__ == "__main__":
         df_C = run_strategy_C()
 
     if args.strategy == "all":
-        combined = combine_homologs(df_A, df_B, df_C)
+        combine_homologs(df_A, df_B, df_C)
