@@ -9,9 +9,10 @@ Logan / SRA Metagenomic Search for REE-Binding Protein Architectures
 The curated databases (UniProt, PDB) capture well-studied organisms. The
 microbial dark matter — uncultured taxa in acid mine drainage, deep sea,
 biofilm, and rare-earth-rich soils — is accessible only through metagenomic
-assemblies. The Serratus/Logan project (https://github.com/serratus-bio/logan)
-assembles ~5.7 million public SRA experiments into searchable contigs, giving us
-access to the broadest possible view of microbial protein sequence space.
+assemblies. The Logan project (https://github.com/IndexThePlanet/Logan)
+assembled all 27+ million public SRA experiments (Dec 2023 freeze, 50 Pbp)
+into searchable contigs and unitigs, giving us access to the broadest possible
+view of microbial protein sequence space.
 
 ─── Pipeline Design ──────────────────────────────────────────────────────────
 
@@ -21,7 +22,10 @@ access to the broadest possible view of microbial protein sequence space.
     - Calibrate and save to datasets/hmm_profiles/
 
   Stage 2 — Logan Data Access + ORF Prediction (SLURM array jobs)
-    - Logan contigs stored at  s3://logan-pub/c/<PREFIX>/<SRR>.fa.gz
+    - Logan contigs: s3://logan-pub/c/{ACCESSION}/{ACCESSION}.contigs.fa.zst
+    - Logan unitigs: s3://logan-pub/u/{ACCESSION}/{ACCESSION}.unitigs.fa.zst
+    - Files use Zstandard (.zst) compression — NOT gzip
+    - Accession list derived from s3://logan-pub/stats/logan-seqstats.parquet
     - Each SLURM task: download chunk → pyrodigal ORF prediction → search HMMs
     - Output hits to datasets/metagenomic_hits/chunk_{id}.parquet
 
@@ -54,10 +58,13 @@ access to the broadest possible view of microbial protein sequence space.
 
 ─── Logan S3 Structure ───────────────────────────────────────────────────────
 
-  s3://logan-pub/c/<2-char-prefix>/<SRR_ACCESSION>.fa.gz    ← contig FASTA
-  s3://logan-pub/c/manifest.txt                              ← full accession list
+  s3://logan-pub/c/{ACCESSION}/{ACCESSION}.contigs.fa.zst    ← contig FASTA  (zstd)
+  s3://logan-pub/u/{ACCESSION}/{ACCESSION}.unitigs.fa.zst    ← unitig FASTA  (zstd)
+  s3://logan-pub/stats/logan-seqstats.parquet                ← per-accession stats
 
-  Environment-targeted subsets are pre-filtered via SRA metadata (BioProject).
+  Environment-targeted subsets are filtered via NCBI Entrez BioProject → SRR
+  lookup, then cross-referenced against the Logan stats parquet for coverage.
+  Use --mode=scan-environment with --bioprojects=PRJNA... to run targeted scans.
 
 ─── Pfam HMMs Used ───────────────────────────────────────────────────────────
 
@@ -82,11 +89,14 @@ Output:
 """
 
 import argparse
+import csv
 import gzip
+import io
 import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -127,6 +137,12 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+try:
+    import zstandard
+    ZSTD_AVAILABLE = True
+except ImportError:
+    ZSTD_AVAILABLE = False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,9 +162,13 @@ log = logging.getLogger("metagenomic_search")
 # LOGAN / S3 CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-LOGAN_S3_BUCKET   = "logan-pub"
-LOGAN_CONTIG_PREFIX = "c"        # contigs live at s3://logan-pub/c/<prefix>/<SRR>.fa.gz
-LOGAN_MANIFEST_KEY  = "c/manifest.txt"
+LOGAN_S3_BUCKET      = "logan-pub"
+LOGAN_CONTIG_PREFIX  = "c"   # s3://logan-pub/c/{ACC}/{ACC}.contigs.fa.zst
+LOGAN_UNITIG_PREFIX  = "u"   # s3://logan-pub/u/{ACC}/{ACC}.unitigs.fa.zst
+LOGAN_STATS_KEY      = "stats/logan-seqstats.parquet"  # per-accession stats (replaces manifest)
+# NCBI Entrez API (no key needed for ≤3 req/s; set NCBI_API_KEY env var for 10/s)
+NCBI_ENTREZ_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+NCBI_RATE_LIMIT_DELAY = 0.34  # seconds between requests (3/sec without API key)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PFAM HMM ACCESSIONS PER ARCHITECTURE
@@ -477,19 +497,40 @@ def build_all_hmm_profiles(force: bool = False) -> dict:
 # STAGE 2A: LOGAN DATA ACCESS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_logan_manifest(cache_path: Optional[Path] = None) -> List[str]:
+def get_logan_manifest(
+    cache_path: Optional[Path] = None,
+    min_contigs: int = 100,
+    filter_accessions: Optional[List[str]] = None,
+) -> List[str]:
     """
-    Retrieve the list of all SRA accessions in Logan from S3.
+    Retrieve accession list from the Logan stats Parquet file on S3.
+
+    Logan no longer ships a plain-text manifest.  The authoritative source is:
+      s3://logan-pub/stats/logan-seqstats.parquet
+
+    Parquet columns include:
+      accession                       – SRR/ERR/DRR accession
+      seqstats_contigs_nbseq          – number of assembled contigs
+      seqstats_contigs_n50            – N50 of contigs (nt)
+      seqstats_contigs_sumlen         – total assembled bases
+      size_contigs_after_compression  – compressed file size (bytes)
+
+    Args:
+        cache_path:         Where to cache the accession list (.txt).
+                            Defaults to DATA_DIR/logan_manifest.txt.
+        min_contigs:        Minimum number of contigs required (filters out
+                            accessions with very sparse assemblies).
+        filter_accessions:  If provided, restrict to this set of accessions
+                            (used when targeting a BioProject subset).
 
     Returns a list of SRR/ERR/DRR accession strings.
-    Caches to disk to avoid repeated downloads.
     """
     if cache_path is None:
         cache_path = DATA_DIR / "logan_manifest.txt"
 
     if cache_path.exists():
         accessions = cache_path.read_text().strip().splitlines()
-        log.info(f"Logan manifest: {len(accessions):,} accessions (cached)")
+        log.info(f"Logan manifest: {len(accessions):,} accessions (cached at {cache_path.name})")
         return accessions
 
     if not BOTO3_AVAILABLE:
@@ -502,33 +543,226 @@ def get_logan_manifest(cache_path: Optional[Path] = None) -> List[str]:
             region_name="us-east-1",
             config=Config(signature_version=UNSIGNED),
         )
-        obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=LOGAN_MANIFEST_KEY)
-        content = obj["Body"].read().decode("utf-8")
-        accessions = content.strip().splitlines()
+
+        log.info(f"Downloading Logan stats parquet: s3://{LOGAN_S3_BUCKET}/{LOGAN_STATS_KEY}")
+        obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=LOGAN_STATS_KEY)
+        parquet_bytes = obj["Body"].read()
+
+        stats_df = pd.read_parquet(io.BytesIO(parquet_bytes))
+        log.info(f"  Stats parquet: {len(stats_df):,} accessions, "
+                 f"columns: {list(stats_df.columns)}")
+
+        # Filter: minimum contig count (skip nearly-empty assemblies)
+        if min_contigs > 0 and "seqstats_contigs_nbseq" in stats_df.columns:
+            before = len(stats_df)
+            stats_df = stats_df[stats_df["seqstats_contigs_nbseq"] >= min_contigs]
+            log.info(f"  After min_contigs={min_contigs} filter: "
+                     f"{before:,} → {len(stats_df):,} accessions")
+
+        # Optionally restrict to a pre-defined accession set
+        if filter_accessions:
+            acc_set = set(filter_accessions)
+            stats_df = stats_df[stats_df["accession"].isin(acc_set)]
+            log.info(f"  After BioProject filter: {len(stats_df):,} accessions")
+
+        accessions = stats_df["accession"].dropna().tolist()
         cache_path.write_text("\n".join(accessions))
-        log.info(f"Logan manifest: {len(accessions):,} accessions (downloaded)")
+        log.info(f"Logan manifest: {len(accessions):,} accessions → cached to {cache_path.name}")
         return accessions
 
     except Exception as e:
-        log.error(f"Could not download Logan manifest: {e}")
+        log.error(f"Could not download Logan stats parquet: {e}")
         return []
+
+
+def get_bioproject_accessions(
+    bioproject_ids: List[str],
+    max_per_project: int = 1000,
+    api_key: Optional[str] = None,
+) -> List[str]:
+    """
+    Convert BioProject IDs to SRR/ERR/DRR run accessions via NCBI Entrez API.
+
+    Uses NCBI eSearch (db=sra) + eFetch (runinfo CSV) to map each BioProject
+    to its SRA run accessions.  The accessions returned can be used directly
+    with iter_logan_contigs() — Logan covers >96% of public SRA by read count.
+
+    Args:
+        bioproject_ids:   List of BioProject IDs (e.g. ["PRJNA107", "PRJNA48473"]).
+        max_per_project:  Maximum runs to retrieve per BioProject.
+        api_key:          NCBI API key (allows 10 req/s vs 3 req/s without).
+                          Also reads from NCBI_API_KEY environment variable.
+
+    Returns:
+        Deduplicated list of run accessions.
+    """
+    if not REQUESTS_AVAILABLE:
+        log.warning("requests not available — cannot query NCBI Entrez for BioProject accessions")
+        return []
+
+    # API key from argument or environment
+    _api_key = api_key or os.environ.get("NCBI_API_KEY")
+    delay = 0.11 if _api_key else NCBI_RATE_LIMIT_DELAY
+
+    all_accessions: List[str] = []
+
+    for bp_id in bioproject_ids:
+        try:
+            # ── Step 1: eSearch to get SRA UIDs linked to this BioProject ──
+            search_params = {
+                "db":      "sra",
+                "term":    f"{bp_id}[BioProject]",
+                "retmax":  str(max_per_project),
+                "retmode": "json",
+            }
+            if _api_key:
+                search_params["api_key"] = _api_key
+
+            r = requests.get(
+                f"{NCBI_ENTREZ_BASE}/esearch.fcgi",
+                params=search_params,
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            uids = data.get("esearchresult", {}).get("idlist", [])
+            n_total = int(data.get("esearchresult", {}).get("count", 0))
+
+            if not uids:
+                log.info(f"  BioProject {bp_id}: 0 SRA experiments found")
+                time.sleep(delay)
+                continue
+
+            log.info(f"  BioProject {bp_id}: {n_total} total experiments, "
+                     f"fetching {len(uids)} run accessions")
+            time.sleep(delay)
+
+            # ── Step 2: eFetch runinfo CSV to get SRR/ERR/DRR accessions ──
+            fetch_params = {
+                "db":      "sra",
+                "id":      ",".join(uids),
+                "rettype": "runinfo",
+                "retmode": "csv",
+            }
+            if _api_key:
+                fetch_params["api_key"] = _api_key
+
+            r2 = requests.get(
+                f"{NCBI_ENTREZ_BASE}/efetch.fcgi",
+                params=fetch_params,
+                timeout=60,
+            )
+            r2.raise_for_status()
+            time.sleep(delay)
+
+            # Parse CSV — "Run" column contains SRR/ERR/DRR accessions
+            reader = csv.DictReader(io.StringIO(r2.text))
+            bp_runs = []
+            for row in reader:
+                run = row.get("Run", "").strip()
+                if run and run[:3] in ("SRR", "ERR", "DRR"):
+                    bp_runs.append(run)
+
+            all_accessions.extend(bp_runs)
+            log.info(f"    → {len(bp_runs)} run accessions retrieved")
+
+        except requests.exceptions.Timeout:
+            log.warning(f"  BioProject {bp_id}: NCBI Entrez request timed out")
+        except Exception as e:
+            log.warning(f"  BioProject {bp_id}: Entrez lookup failed: {e}")
+
+    # Deduplicate while preserving order
+    seen: set = set()
+    unique = []
+    for acc in all_accessions:
+        if acc not in seen:
+            seen.add(acc)
+            unique.append(acc)
+
+    log.info(f"BioProject lookup complete: {len(unique)} unique run accessions "
+             f"from {len(bioproject_ids)} BioProjects")
+    return unique
+
+
+def _decompress_zst(raw_bytes: bytes) -> str:
+    """
+    Decompress Zstandard-compressed bytes to a UTF-8 string.
+
+    Tries the `zstandard` Python library first; falls back to the `zstd`
+    system binary if the library is absent.  Raises RuntimeError if neither
+    is available.
+    """
+    if ZSTD_AVAILABLE:
+        dctx = zstandard.ZstdDecompressor()
+        return dctx.decompress(raw_bytes).decode("utf-8", errors="replace")
+
+    # Fallback: try system `zstd` binary
+    try:
+        result = subprocess.run(
+            ["zstd", "--decompress", "--stdout", "-"],
+            input=raw_bytes,
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            return result.stdout.decode("utf-8", errors="replace")
+        raise RuntimeError(f"zstd returned exit code {result.returncode}: "
+                           f"{result.stderr.decode()}")
+    except FileNotFoundError:
+        raise RuntimeError(
+            "Cannot decompress .fa.zst: install the 'zstandard' Python package "
+            "('pip install zstandard') or the 'zstd' system binary."
+        )
+
+
+def _parse_fasta(text: str) -> Iterator[Tuple[str, str]]:
+    """Yield (sequence_id, sequence) pairs from a FASTA string."""
+    current_id: Optional[str] = None
+    current_seq: List[str] = []
+    for line in text.splitlines():
+        if line.startswith(">"):
+            if current_id and current_seq:
+                yield current_id, "".join(current_seq)
+            current_id  = line[1:].split()[0]
+            current_seq = []
+        elif current_id is not None:
+            current_seq.append(line.strip())
+    if current_id and current_seq:
+        yield current_id, "".join(current_seq)
 
 
 def iter_logan_contigs(
     sra_accessions: List[str],
     cache_dir: Optional[Path] = None,
+    use_contigs: bool = True,
 ) -> Iterator[Tuple[str, str, str]]:
     """
-    Stream contig sequences for a list of SRA accessions from Logan S3.
+    Stream contig (or unitig) sequences for a list of SRA accessions from Logan S3.
 
     Yields: (sra_accession, contig_id, nucleotide_sequence)
 
-    Logan S3 path: s3://logan-pub/c/<2-char-prefix>/<SRR>.fa.gz
-    e.g.  SRR1234567  →  s3://logan-pub/c/SR/SRR1234567.fa.gz
+    Logan S3 paths (Zstandard-compressed FASTA, NOT gzip):
+      Contigs: s3://logan-pub/c/{ACCESSION}/{ACCESSION}.contigs.fa.zst
+      Unitigs: s3://logan-pub/u/{ACCESSION}/{ACCESSION}.unitigs.fa.zst
+
+    Args:
+        sra_accessions:  List of SRR/ERR/DRR accession strings.
+        cache_dir:       If set, downloaded files are cached here to avoid
+                         re-downloading.  File name: {ACC}.contigs.fa.zst
+        use_contigs:     True = use contigs (longer, ~40× compression).
+                         False = use unitigs (near-lossless, ~10× compression).
+
+    Note:
+        Requires either the `zstandard` Python package or the `zstd` system
+        binary for decompression.  Install with: pip install zstandard
     """
     if not BOTO3_AVAILABLE:
-        log.error("boto3 not available — cannot stream Logan contigs")
+        log.error("boto3 not available — cannot stream Logan data from S3.  "
+                  "Install with: pip install boto3")
         return
+
+    seq_type   = "contigs" if use_contigs else "unitigs"
+    s3_prefix  = LOGAN_CONTIG_PREFIX if use_contigs else LOGAN_UNITIG_PREFIX
 
     s3 = boto3.client(
         "s3",
@@ -537,41 +771,36 @@ def iter_logan_contigs(
     )
 
     if cache_dir:
-        cache_dir.mkdir(exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
     for acc in sra_accessions:
-        prefix = acc[:2]  # e.g. "SR" for SRR, "ER" for ERR, "DR" for DRR
-        s3_key = f"{LOGAN_CONTIG_PREFIX}/{prefix}/{acc}.fa.gz"
-        local_path = (cache_dir / f"{acc}.fa.gz") if cache_dir else None
+        # Logan stores each accession in its own subdirectory:
+        #   s3://logan-pub/c/SRR1234567/SRR1234567.contigs.fa.zst
+        s3_key     = f"{s3_prefix}/{acc}/{acc}.{seq_type}.fa.zst"
+        local_path = (cache_dir / f"{acc}.{seq_type}.fa.zst") if cache_dir else None
 
         try:
             # Use local cache if available
             if local_path and local_path.exists():
-                fh = gzip.open(local_path, "rt")
+                raw = local_path.read_bytes()
+                log.debug(f"  {acc}: using cached file ({len(raw):,} bytes)")
             else:
                 obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=s3_key)
                 raw = obj["Body"].read()
                 if local_path:
                     local_path.write_bytes(raw)
-                fh = gzip.open(__import__("io").BytesIO(raw), "rt")
+                    log.debug(f"  {acc}: downloaded and cached ({len(raw):,} bytes)")
 
-            # Parse FASTA
-            current_id, current_seq = None, []
-            for line in fh:
-                line = line.rstrip()
-                if line.startswith(">"):
-                    if current_id and current_seq:
-                        yield acc, current_id, "".join(current_seq)
-                    current_id  = line[1:].split()[0]
-                    current_seq = []
-                else:
-                    current_seq.append(line)
-            if current_id and current_seq:
-                yield acc, current_id, "".join(current_seq)
-            fh.close()
+            # Decompress Zstandard → UTF-8 string → parse FASTA
+            fasta_text = _decompress_zst(raw)
+            n_yielded  = 0
+            for contig_id, nuc_seq in _parse_fasta(fasta_text):
+                yield acc, contig_id, nuc_seq
+                n_yielded += 1
+            log.debug(f"  {acc}: {n_yielded} contigs parsed")
 
         except Exception as e:
-            log.debug(f"  {acc}: {e}")
+            log.debug(f"  {acc}: skipping — {e}")
             continue
 
 
@@ -1408,12 +1637,13 @@ def main():
 
     elif args.mode == "generate-slurm":
         manifest = args.manifest or DATA_DIR / "logan_manifest.txt"
-        # Download manifest if not present
+        # Download accession list if not cached.
+        # Logan no longer ships a plain manifest.txt; the stats parquet is used instead.
         if not manifest.exists():
-            log.info("Downloading Logan manifest...")
+            log.info("Building accession list from Logan stats parquet...")
             accessions = get_logan_manifest(manifest)
             if not accessions:
-                log.error("Could not retrieve Logan manifest — is AWS configured?")
+                log.error("Could not retrieve accession list — is AWS/boto3 configured?")
                 sys.exit(1)
         else:
             accessions = manifest.read_text().strip().splitlines()
@@ -1464,26 +1694,65 @@ def main():
             log.info(f"No hits in chunk {args.chunk_id}")
 
     elif args.mode == "scan-environment":
-        # Targeted scan for a specific environment's BioProjects
+        # Targeted scan for a specific environment's BioProjects.
+        # Uses NCBI Entrez to convert BioProject IDs → SRR accessions,
+        # then streams contigs from Logan S3 and scans with HMM profiles.
         env_name    = args.environment
-        bioprojects = args.bioprojects.split(",") if args.bioprojects else []
+        bioprojects = [b.strip() for b in args.bioprojects.split(",") if b.strip()] \
+                      if args.bioprojects else []
         env_conf    = REE_ENVIRONMENTS.get(env_name, {})
         priority    = env_conf.get("priority", 9)
 
-        # In production: use SRA API to get SRR accessions for each BioProject
-        # Here we log the intent
+        if not bioprojects:
+            bioprojects = env_conf.get("bioprojects", [])
+
         log.info(f"Targeted scan: {env_name} ({len(bioprojects)} BioProjects)")
         log.info(f"  Rationale: {env_conf.get('rationale', 'N/A')}")
-        log.info("  (In production: fetch SRR accessions from SRA API, then scan)")
+        log.info(f"  BioProjects: {bioprojects}")
+
+        # Step 1: BioProject → SRR accessions via NCBI Entrez
+        log.info("  Fetching SRR accessions from NCBI Entrez...")
+        sra_accessions = get_bioproject_accessions(
+            bioprojects,
+            max_per_project=args.chunk_size,
+        )
+
+        if not sra_accessions:
+            log.warning(f"  No accessions found for {env_name} — "
+                        "check BioProject IDs or network connectivity")
+            sys.exit(0)
+
+        log.info(f"  Found {len(sra_accessions)} SRA runs to scan")
 
         hmm_profiles = load_hmm_profiles(HMM_DIR)
         if not hmm_profiles:
             log.error("No HMM profiles found — run --mode=build-hmms first")
             sys.exit(1)
 
-        # Placeholder: scan_chunk would be called per batch of SRR accessions
+        # Step 2: Scan in chunks
+        chunk_size = args.chunk_size
+        all_dfs    = []
+        for chunk_idx, start in enumerate(range(0, len(sra_accessions), chunk_size)):
+            chunk_accs = sra_accessions[start : start + chunk_size]
+            df = scan_chunk(
+                chunk_id       = chunk_idx,
+                sra_accessions = chunk_accs,
+                hmm_profiles   = hmm_profiles,
+                environment    = env_name,
+                env_priority   = priority,
+                cache_dir      = args.cache_dir,
+            )
+            if not df.empty:
+                all_dfs.append(df)
+
+        # Step 3: Save results
         out_path = HITS_DIR / f"env_{env_name}.parquet"
-        log.info(f"  Would write hits to: {out_path}")
+        if all_dfs:
+            merged = pd.concat(all_dfs, ignore_index=True)
+            merged.to_parquet(out_path, index=False)
+            log.info(f"  Saved {len(merged)} hits → {out_path}")
+        else:
+            log.info(f"  No hits found for environment: {env_name}")
 
     elif args.mode == "aggregate":
         merged = aggregate_hits(HITS_DIR)
