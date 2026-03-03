@@ -17,6 +17,8 @@ Subcommands
     engineer        Extract CaM-family EF-hand loops & generate D→P mutants.
     cofactors       Run cofactor / prosthetic-group architecture pipeline.
     scan            Search the Logan metagenome dataset with profile HMMs.
+    annotate        Functional annotation of scan hits (taxonomy, eggNOG,
+                    genomic neighborhood; archaeal prioritization).
 
 Global flags
 ------------
@@ -29,6 +31,7 @@ Global flags
 import argparse
 import os
 import sys
+from pathlib import Path
 
 
 def _set_workspace(path: str) -> None:
@@ -85,6 +88,30 @@ def cmd_engineer(args: argparse.Namespace) -> int:
 def cmd_cofactors(args: argparse.Namespace) -> int:
     from ree_miner import cofactors
     return cofactors.main() or 0
+
+
+def cmd_annotate(args: argparse.Namespace) -> int:
+    """Functional annotation of metagenome scan hits."""
+    extra = []
+    if hasattr(args, "hits")           and args.hits:           extra += ["--hits",             str(args.hits)]
+    if hasattr(args, "out")            and args.out:            extra += ["--out",              str(args.out)]
+    if hasattr(args, "contigs_dir")    and args.contigs_dir:    extra += ["--contigs-dir",      str(args.contigs_dir)]
+    if hasattr(args, "eggnog_mode")    and args.eggnog_mode:    extra += ["--eggnog-mode",      args.eggnog_mode]
+    if hasattr(args, "eggnog_db")      and args.eggnog_db:      extra += ["--eggnog-db",        str(args.eggnog_db)]
+    if hasattr(args, "eggnog_tax_scope") and args.eggnog_tax_scope is not None:
+        extra += ["--eggnog-tax-scope", str(args.eggnog_tax_scope)]
+    if hasattr(args, "archaeal_only")  and args.archaeal_only:  extra += ["--archaeal-only"]
+    if hasattr(args, "export_json")    and args.export_json:    extra += ["--export-json",      str(args.export_json)]
+    if hasattr(args, "ncbi_api_key")   and args.ncbi_api_key:   extra += ["--ncbi-api-key",     args.ncbi_api_key]
+    if hasattr(args, "offline_test")   and args.offline_test:   extra += ["--offline-test"]
+
+    old_argv = sys.argv
+    sys.argv = ["ree-miner annotate"] + extra
+    try:
+        from ree_miner import functional_annotation
+        return functional_annotation.main() or 0
+    finally:
+        sys.argv = old_argv
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -157,13 +184,53 @@ def main() -> None:
     p_scan = sub.add_parser("scan", help="Search Logan metagenome with profile HMMs.")
     p_scan.add_argument(
         "--mode",
-        choices=["offline-test", "build-hmms", "generate-slurm", "scan-chunk", "aggregate"],
+        choices=["offline-test", "build-hmms", "generate-slurm", "scan-chunk",
+                 "aggregate", "scan-environment"],
         default="offline-test",
         help="Pipeline stage to run (default: offline-test).",
     )
-    p_scan.add_argument("--manifest", metavar="FILE", help="Logan manifest file path.")
-    p_scan.add_argument("--chunk-id", type=int, metavar="N", help="SLURM array task index.")
+    p_scan.add_argument("--manifest",    metavar="FILE",  help="Logan manifest file path.")
+    p_scan.add_argument("--chunk-id",    type=int, metavar="N", help="SLURM array task index.")
+    p_scan.add_argument("--environment", metavar="ENV",  help="Target environment key.")
+    p_scan.add_argument("--bioprojects", metavar="IDS",  help="Comma-separated BioProject IDs.")
     p_scan.set_defaults(func=cmd_scan)
+
+    # annotate
+    p_ann = sub.add_parser(
+        "annotate",
+        help="Functional annotation of scan hits (taxonomy, eggNOG, neighborhood).",
+        description=(
+            "Annotates hits from 'ree-miner scan' with:\n"
+            "  • NCBI taxonomy (domain / phylum / archaeal flags)\n"
+            "  • eggNOG-mapper COG/KEGG/GO terms\n"
+            "  • Genomic neighborhood REE gene cluster scoring\n"
+            "  • Archaeal hit prioritization\n\n"
+            "Run 'ree-miner scan --mode aggregate' first to produce the merged parquet."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_ann.add_argument("--hits",         type=Path, default=None,
+                       help="Input hits parquet (default: datasets/logan_hits_merged.parquet)")
+    p_ann.add_argument("--out",          type=Path, default=None,
+                       help="Output annotated parquet (default: datasets/annotated_hits.parquet)")
+    p_ann.add_argument("--contigs-dir",  type=Path, default=None,  dest="contigs_dir",
+                       help="Directory of contig FASTA files for neighborhood analysis")
+    p_ann.add_argument("--eggnog-mode",  choices=["web", "local", "skip"], default="skip",
+                       dest="eggnog_mode",
+                       help="eggNOG-mapper mode: web API, local install, or skip (default: skip)")
+    p_ann.add_argument("--eggnog-db",    type=Path, default=None,  dest="eggnog_db",
+                       help="Path to local eggNOG database (required for --eggnog-mode=local)")
+    p_ann.add_argument("--eggnog-tax-scope", type=int, default=1, dest="eggnog_tax_scope",
+                       help="Taxonomic scope for eggNOG (1=root, 2=Bacteria, 2157=Archaea)")
+    p_ann.add_argument("--archaeal-only", action="store_true", dest="archaeal_only",
+                       help="After annotation, print sorted archaeal hit summary")
+    p_ann.add_argument("--export-json",  type=Path, default=None,  dest="export_json",
+                       help="Also export ESM-Bind-compatible JSON with full annotations")
+    p_ann.add_argument("--ncbi-api-key", type=str, default=None,   dest="ncbi_api_key",
+                       help="NCBI API key (also reads NCBI_API_KEY env var)")
+    p_ann.add_argument("--offline-test", action="store_true",       dest="offline_test",
+                       help="Run built-in offline self-test (T14a–T14f) and exit")
+    p_ann.set_defaults(func=cmd_annotate)
 
     args = parser.parse_args()
 
