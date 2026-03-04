@@ -103,6 +103,20 @@ ARCH_NOVELTY = {
 # 1. SEQUENCE CLUSTERING (greedy, 30% identity — mirrors ESM-Bind)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _kmer_set(seq: str, k: int = 3) -> frozenset:
+    """Return the set of k-mers for a (truncated) sequence."""
+    s = seq[:500]
+    return frozenset(s[i:i+k] for i in range(len(s) - k + 1))
+
+
+def _kmer_jaccard(a: frozenset, b: frozenset) -> float:
+    """Fast Jaccard similarity between two k-mer sets."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return inter / (len(a) + len(b) - inter)
+
+
 def compute_sequence_identity(seq_a: str, seq_b: str) -> float:
     """
     Compute pairwise sequence identity using global alignment (BLOSUM62).
@@ -110,7 +124,6 @@ def compute_sequence_identity(seq_a: str, seq_b: str) -> float:
     """
     if not seq_a or not seq_b:
         return 0.0
-    # Use local alignment for speed on long sequences
     try:
         alns = pairwise2.align.globalds(
             seq_a[:500], seq_b[:500],   # cap at 500aa for performance
@@ -142,28 +155,42 @@ def cluster_sequences(df: pd.DataFrame, identity_threshold: float = 0.30,
     nearest cluster it exceeds the threshold with.
 
     Adds columns: cluster_id, is_representative.
-    Performance note: O(n^2) — acceptable for datasets up to ~2000 sequences.
-    For larger sets, use MMseqs2 or pre-filter by length.
+
+    Speed-up: k-mer Jaccard pre-filter (k=3, threshold 0.03) skips the
+    expensive BLOSUM62 alignment when sequences are obviously unrelated,
+    reducing wall-time from O(n^2 * alignment) to near-linear in practice.
     """
     seqs = df[seq_col].tolist()
     n = len(seqs)
     log.info(f"Clustering {n} sequences at {identity_threshold*100:.0f}% identity ...")
 
-    representatives = []   # (rep_idx, rep_seq)
+    # Precompute k-mer sets once for all sequences
+    kmer_sets = [_kmer_set(s) for s in seqs]
+
+    # For 30% sequence identity, k-mer Jaccard(k=3) is typically >= 0.03
+    # Use a generous lower bound to avoid false negatives.
+    KMER_PREFILTER = 0.03
+
+    representatives = []   # (rep_idx, rep_seq, rep_kmer_set)
     cluster_id = [-1] * n
 
     for i, seq in enumerate(seqs):
         assigned = False
-        for rep_idx, rep_seq in representatives:
+        kset_i = kmer_sets[i]
+        for rep_idx, rep_seq, rep_kset in representatives:
+            # Fast length check
             if abs(len(seq) - len(rep_seq)) / max(len(rep_seq), 1) > 0.5:
-                continue  # skip obviously different lengths
+                continue
+            # Fast k-mer pre-filter — skip alignment when clearly dissimilar
+            if _kmer_jaccard(kset_i, rep_kset) < KMER_PREFILTER:
+                continue
             identity = compute_sequence_identity(seq, rep_seq)
             if identity >= identity_threshold:
                 cluster_id[i] = rep_idx
                 assigned = True
                 break
         if not assigned:
-            representatives.append((i, seq))
+            representatives.append((i, seq, kset_i))
             cluster_id[i] = i
 
         if (i + 1) % 100 == 0:

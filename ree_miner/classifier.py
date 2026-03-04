@@ -312,11 +312,19 @@ def classify_all_structures(seqs_csv: Path = DATA_DIR / "pdb_sequences_raw.csv")
 
     domains_df = pd.DataFrame(all_domains)
 
+    # Drop columns from seqs_df that will be replaced by the CATH classification
+    # (they may already exist if pdb_sequences_raw.csv was produced by a prior run)
+    overlap_cols = ["architecture_class", "is_ef_hand", "is_novel_arch", "source",
+                    "cath_id", "cath_arch", "cath_topology", "superfamily_name"]
+    seqs_df = seqs_df.drop(columns=[c for c in overlap_cols if c in seqs_df.columns])
+
     # Merge back with sequence data
+    merge_cols = ["pdb_id"] + [c for c in
+                  ["cath_id", "cath_arch", "cath_topology", "superfamily_name",
+                   "architecture_class", "is_ef_hand", "is_novel_arch", "source"]
+                  if c in domains_df.columns]
     result = seqs_df.merge(
-        domains_df[["pdb_id", "cath_id", "cath_arch", "cath_topology",
-                    "superfamily_name", "architecture_class",
-                    "is_ef_hand", "is_novel_arch", "source"]].drop_duplicates("pdb_id"),
+        domains_df[merge_cols].drop_duplicates("pdb_id"),
         on="pdb_id",
         how="left",
     )
