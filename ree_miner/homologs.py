@@ -221,6 +221,9 @@ def search_uniprot(query: str, max_results: int = 500) -> list[dict]:
     }
     results = []
     url = UNIPROT_SEARCH_URL
+    malformed_headers = []
+    reconstructed = False
+    
     while url:
         try:
             resp = requests.get(url, params=params if url == UNIPROT_SEARCH_URL else None,
@@ -228,18 +231,42 @@ def search_uniprot(query: str, max_results: int = 500) -> list[dict]:
             resp.raise_for_status()
             data = resp.json()
             results.extend(data.get("results", []))
-            # Follow pagination link
+            
+            # ── Parse the Link header for the next page URL ──────────────────
+            # UniProt returns pagination cursors in the HTTP Link header, e.g.:
+            #   <https://rest.uniprot.org/uniprotkb/search?query=...&cursor=...>; rel="next"
+            # We use re.findall to capture all <url>; rel="..." pairs in one pass,
+            # then filter for rel="next". re.search is not used here because it
+            # returns only the first match — which may be rel="prev" if that link
+            # appears first in the header, causing us to paginate backwards.
             link_header = resp.headers.get("Link", "")
             next_url = None
-            for part in link_header.split(","):
-                if 'rel="next"' in part:
-                    next_url = part.split(";")[0].strip().strip("<>")
+            for candidate, rel in re.findall(r'<([^>]+)>\s*;\s*rel="([^"]+)"', link_header):
+                if rel == "next":
+                    # If the scheme+host prefix was trimmed (e.g. due to a comma
+                    # in a query parameter splitting the URL), reconstruct the full
+                    # URL using the known UniProt search base. This is safe because
+                    # search_uniprot only ever paginates on UNIPROT_SEARCH_URL.
+                    if not candidate.startswith(("http://", "https://")):
+                        corrected = UNIPROT_SEARCH_URL + "?" + candidate
+                        malformed_headers.append((candidate, corrected))
+                        candidate = corrected
+                        reconstructed = True
+                    next_url = candidate
+            # ───────────────────────────────
+            
             url = next_url
             params = None  # params only for first request
             time.sleep(REQUEST_PAUSE)
         except Exception as e:
             log.warning(f"UniProt query failed: {e}")
             break
+
+    # Log if any headers needed to be reconstructed, if the regex didn't work
+    if reconstructed:
+        for original, corrected in malformed_headers:
+            log.warning(f"Malformed next URL detected: {original!r} → reconstructed as {corrected!r}")
+            
     return results
 
 
