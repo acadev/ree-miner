@@ -128,7 +128,6 @@ UNIPROT_QUERIES = [
     {"query": "cc_function:\"rare earth\" OR cc_function:lanthanide",    "label": "Ln_function_any"},
     # RTX domain proteins (for the beta-roll architecture from Paper 4)
     {"query": "ft_domain:RTX AND (taxonomy_id:562 OR taxonomy_id:1234)",    "label": "RTX_ecoli_related"},
-    {"query": "protein_family:\"RTX toxin\" AND cc_function:calcium AND reviewed:true", "label": "RTX_reviewed"},
     # De novo designs and engineered variants
     {"query": "protein_name:\"lanthanide binding tag\" OR protein_name:LBT", "label": "LBT"},
     # Lanthanide transport / metallophore-related
