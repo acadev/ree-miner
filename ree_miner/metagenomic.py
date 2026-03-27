@@ -270,6 +270,86 @@ REE_ENVIRONMENTS = {
         "rationale":   "Broad soil diversity; baseline for novel discovery",
         "priority":    3,
     },
+
+    # ── ARCHAEAL-SPECIFIC ENVIRONMENTS ────────────────────────────────────
+    # Archaea are enriched in geochemically metal-rich extreme environments
+    # and produce thermostable metal-binding proteins with industrial relevance.
+
+    "thermoacidophilic_archaea": {
+        "bioprojects": [
+            "PRJNA235678",   # Sulfolobus acidocaldarius DSM 639 (hot spring AMD)
+            "PRJNA397621",   # Metallosphaera sedula TH2 (ore bioleaching)
+            "PRJNA307938",   # Acidianus brierleyi (volcanic geothermal)
+            "PRJNA418034",   # Sulfolobales metagenome, Yellowstone hot spring
+            "PRJNA490220",   # Thermoacidophile metagenome, Rio Tinto AMD Spain
+        ],
+        "rationale": (
+            "Thermoacidophilic Archaea (Sulfolobales, Metallosphaerales) in geothermal "
+            "and AMD environments actively leach rare and base metals from sulfide ores.  "
+            "Proteins from these organisms are thermostable (optima 65–80 °C), acid-stable "
+            "(pH 1–4), and evolve under intense REE selection pressure — making them "
+            "industrially attractive for high-temperature bioleaching and biosorbent columns."
+        ),
+        "priority":         1,
+        "taxonomy_domain":  "Archaea",
+    },
+
+    "hydrothermal_vent_archaea": {
+        "bioprojects": [
+            "PRJNA412919",   # Loki's Castle deep-sea vent (Asgard archaea)
+            "PRJNA298355",   # Mid-Atlantic Ridge vent metagenome
+            "PRJNA412100",   # Lost City carbonate vent (Methanosarcinales dominated)
+            "PRJNA348753",   # Rainbow vent field — elevated REE from basaltic leaching
+            "PRJNA512907",   # Guaymas Basin deep-sea hydrothermal vent
+        ],
+        "rationale": (
+            "Deep-sea hydrothermal vents are the highest natural REE flux environments "
+            "on Earth, with La/Ce concentrations up to 100× background seawater from "
+            "basaltic fluid–seawater mixing.  Thermococcales, Archaeoglobales, and "
+            "newly discovered Asgard archaea dominate these communities.  Novel REE-binding "
+            "folds (beyond EF-hand and DYD) are most likely to emerge from unexplored "
+            "Asgard phyla with deep eukaryotic homology."
+        ),
+        "priority":         1,
+        "taxonomy_domain":  "Archaea",
+    },
+
+    "subsurface_continental_archaea": {
+        "bioprojects": [
+            "PRJNA290487",   # Witwatersrand deep mine subsurface (South Africa)
+            "PRJNA317671",   # Sanford Underground Research Facility (South Dakota)
+            "PRJNA434596",   # Fennoscandian Shield deep aquifer
+            "PRJNA378887",   # Continental deep drilling metagenome (KTB borehole)
+        ],
+        "rationale": (
+            "Deep continental subsurface brines and fracture fluids are REE-enriched "
+            "through water–rock interaction with REE-bearing minerals (monazite, xenotime, "
+            "bastnäsite).  These communities are dominated by acetoclastic methanogens and "
+            "DPANN superphylum ultra-small archaea, which may carry REE-binding proteins "
+            "for metal detoxification or energy metabolism in the absence of sunlight."
+        ),
+        "priority":         2,
+        "taxonomy_domain":  "Archaea",
+    },
+
+    "halophilic_archaea": {
+        "bioprojects": [
+            "PRJNA175274",   # Dead Sea metagenome (extreme halophile consortium)
+            "PRJNA345161",   # Atacama salt flat brine (NaCl-saturated, mineral-rich)
+            "PRJNA414877",   # Great Salt Lake deep brine layer
+            "PRJNA380442",   # Solar salterns, La Trinitat, Spain
+        ],
+        "rationale": (
+            "Extreme halophilic Archaea (Halobacteriales) inhabit evaporitic brines where "
+            "multi-valent metals — including lanthanides — are concentrated by evaporation. "
+            "Halobacterial proteins use unique acidic surface patches for halostability, a "
+            "strategy that may co-opt Ln³⁺ coordination.  Their proteins function at ionic "
+            "strengths unreachable by mesophilic counterparts, offering unique binding "
+            "environments for REE separation from high-salt waste streams."
+        ),
+        "priority":         2,
+        "taxonomy_domain":  "Archaea",
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

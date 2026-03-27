@@ -62,6 +62,9 @@ METAL_CODES = {
     # Crystallographic surrogates — underexplored source of REE-binding architectures
     "Y":   {"element": "Y",  "name": "Yttrium",       "type": "surrogate",    "z": 39},
     "YT3": {"element": "Y",  "name": "Yttrium(III)",  "type": "surrogate",    "z": 39},
+    # Ca2+ — included for cofactor-architecture seeds (C2, Annexin, EGF-Ca2+, Gla, Cadherin)
+    # These Ca2+-binding folds have high Ln3+ substitution potential
+    "CA":  {"element": "Ca", "name": "Calcium",       "type": "ca2_surrogate","z": 20},
 }
 
 BINDING_CUTOFF_ANGSTROM = 3.5   # coordination distance threshold
@@ -85,8 +88,28 @@ LITERATURE_SEEDS = [
     "1H4I", "1W6S",
     # Calmodulin (Ca-binding EF-hand — NEGATIVE CONTROL)
     "1GGZ",
+    # ── Cofactor-architecture seeds (high Ln3+ substitution potential) ─────────
+    # C2 domain (β-sandwich, Asp-cluster Ca2+ sites)
+    "1BYN", "1K5W", "2E2E", "3L1E", "5CCB",
+    # Annexin fold (endonexin repeats, type II/III Ca2+ sites)
+    "1AVH", "1AIN", "1MCX", "1HVD", "1PLQ", "1QAV",
+    # EGF-Ca2+ modules (cbEGF in fibrillin, Notch, coagulation factors)
+    "2CQC", "1UZD", "1EMD", "4MHR",
+    # Gla domain (vitamin K-dependent, O-donor dense)
+    "1FIJ", "2H9E", "1C1W", "1PFX", "1Z6C",
+    # Cadherin Ca2+ linker (DxD + DxNDN motifs)
+    "1EDH", "3Q2V", "1L3W", "2O72",
 ]
 NEGATIVE_SEEDS = {"1H4I", "1W6S", "1GGZ"}   # labeled negatives from literature
+
+# Cofactor seeds — Ca2+-binding architectures with high Ln3+ substitution potential
+COFACTOR_SEEDS = {
+    "1BYN", "1K5W", "2E2E", "3L1E", "5CCB",       # C2 domain
+    "1AVH", "1AIN", "1MCX", "1HVD", "1PLQ", "1QAV",# Annexin
+    "2CQC", "1UZD", "1EMD", "4MHR",                # EGF-Ca2+
+    "1FIJ", "2H9E", "1C1W", "1PFX", "1Z6C",        # Gla domain
+    "1EDH", "3Q2V", "1L3W", "2O72",                # Cadherin
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -369,8 +392,10 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
     log.info("=" * 60)
 
     # ── Step 1: query RCSB ──────────────────────────────────────────────────
-    all_codes = list(METAL_CODES.keys())
-    pdb_ids_from_query = query_pdb_for_metals(all_codes)
+    # Exclude CA from RCSB query — Ca2+ is ubiquitous (~100k+ structures).
+    # Cofactor-architecture seeds are added explicitly via LITERATURE_SEEDS.
+    query_codes = [k for k in METAL_CODES if k != "CA"]
+    pdb_ids_from_query = query_pdb_for_metals(query_codes)
 
     # ── Step 2: add literature seeds ────────────────────────────────────────
     all_ids = list(dict.fromkeys(pdb_ids_from_query + LITERATURE_SEEDS))
@@ -406,6 +431,7 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
             c["title"] = meta_lookup.get(pdb_id, {}).get("title", "")
             c["is_negative"] = pdb_id in NEGATIVE_SEEDS
             c["is_literature_seed"] = pdb_id in set(LITERATURE_SEEDS)
+            c["is_cofactor_seed"] = pdb_id in COFACTOR_SEEDS
         all_contacts.extend(contacts)
 
         # Sequences
@@ -419,6 +445,7 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
                 "resolution": meta_lookup.get(pdb_id, {}).get("resolution"),
                 "is_negative": pdb_id in NEGATIVE_SEEDS,
                 "is_literature_seed": pdb_id in set(LITERATURE_SEEDS),
+                "is_cofactor_seed": pdb_id in COFACTOR_SEEDS,
             })
 
     log.info(f"Failed downloads: {failed}")
