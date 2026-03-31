@@ -45,23 +45,27 @@ log = logging.getLogger("pdb_miner")
 # that were NEVER annotated as such — the key insight driving this phase.
 METAL_CODES = {
     # True lanthanides
-    "LA":  {"element": "La", "name": "Lanthanum",     "type": "lanthanide",   "z": 57},
-    "CE":  {"element": "Ce", "name": "Cerium",        "type": "lanthanide",   "z": 58},
-    "PR":  {"element": "Pr", "name": "Praseodymium",  "type": "lanthanide",   "z": 59},
-    "ND":  {"element": "Nd", "name": "Neodymium",     "type": "lanthanide",   "z": 60},
-    "SM":  {"element": "Sm", "name": "Samarium",      "type": "lanthanide",   "z": 62},
-    "EU":  {"element": "Eu", "name": "Europium",      "type": "lanthanide",   "z": 63},
-    "GD":  {"element": "Gd", "name": "Gadolinium",    "type": "surrogate",    "z": 64},  # phasing agent
-    "TB":  {"element": "Tb", "name": "Terbium",       "type": "lanthanide",   "z": 65},
-    "DY":  {"element": "Dy", "name": "Dysprosium",    "type": "lanthanide",   "z": 66},
-    "HO":  {"element": "Ho", "name": "Holmium",       "type": "lanthanide",   "z": 67},
-    "ER":  {"element": "Er", "name": "Erbium",        "type": "lanthanide",   "z": 68},
-    "TM":  {"element": "Tm", "name": "Thulium",       "type": "lanthanide",   "z": 69},
-    "YB":  {"element": "Yb", "name": "Ytterbium",     "type": "lanthanide",   "z": 70},
-    "LU":  {"element": "Lu", "name": "Lutetium",      "type": "lanthanide",   "z": 71},
+    "LA":  {"element": "La", "name": "Lanthanum(III)",       "type": "lanthanide",   "z": 57},
+    "CE":  {"element": "Ce", "name": "Cerium(III)",          "type": "lanthanide",   "z": 58},
+    "PR":  {"element": "Pr", "name": "Praseodymium(III)",    "type": "lanthanide",   "z": 59},
+    "ND":  {"element": "Nd", "name": "Neodymium(III)",       "type": "lanthanide",   "z": 60},
+    "SM":  {"element": "Sm", "name": "Samarium(III)",        "type": "lanthanide",   "z": 62},
+    "EU":  {"element": "Eu", "name": "Europium",        "type": "lanthanide",   "z": 63},
+    "EU3": {"element": "Eu", "name": "Europium(III)",   "type": "lanthanide",   "z": 63},
+    "GD":  {"element": "Gd", "name": "Gadolinium",      "type": "surrogate",    "z": 64},  # phasing agent
+    "GD3": {"element": "Gd", "name": "Gadolinium(III)", "type": "surrogate",    "z": 64},
+    "TB":  {"element": "Tb", "name": "Terbium(III)",         "type": "lanthanide",   "z": 65},
+    "DY":  {"element": "Dy", "name": "Dysprosium(III)",      "type": "lanthanide",   "z": 66},
+    "HO":  {"element": "Ho", "name": "Holmium",         "type": "lanthanide",   "z": 67},
+    "HO3": {"element": "Ho", "name": "Holmium(III)",    "type": "lanthanide",   "z": 67},
+    "ER":  {"element": "Er", "name": "Erbium(III)",          "type": "lanthanide",   "z": 68},
+    "TM":  {"element": "Tm", "name": "Thulium",         "type": "lanthanide",   "z": 69},
+    "YB":  {"element": "Yb", "name": "Ytterbium(III)",       "type": "lanthanide",   "z": 70},
+    "YB2": {"element": "Yb", "name": "Ytterbium(II)",   "type": "lanthanide",   "z": 70},
+    "LU":  {"element": "Lu", "name": "Lutetium(III)",        "type": "lanthanide",   "z": 71},
     # Crystallographic surrogates — underexplored source of REE-binding architectures
-    "Y":   {"element": "Y",  "name": "Yttrium",       "type": "surrogate",    "z": 39},
-    "YT3": {"element": "Y",  "name": "Yttrium(III)",  "type": "surrogate",    "z": 39},
+    "Y":   {"element": "Y",  "name": "Yttrium",         "type": "surrogate",    "z": 39},
+    "YT3": {"element": "Y",  "name": "Yttrium(III)",    "type": "surrogate",    "z": 39},
 }
 
 BINDING_CUTOFF_ANGSTROM = 3.5   # coordination distance threshold
