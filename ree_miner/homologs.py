@@ -539,7 +539,7 @@ def run_strategy_C() -> pd.DataFrame:
         gene_query = f"{gene}[Gene Name] AND Methylorubrum[Organism]"
         ids = search_ncbi_protein(gene_query, max_results=100)
         id_list.extend(ids)
-        time.sleep(REQUEST_PAUSE)
+        time.sleep(NCBI_REQUEST_PAUSE)
 
     # Additional search for lanthanide metallophore transporters
     lm_transport_query = (
@@ -556,13 +556,13 @@ def run_strategy_C() -> pd.DataFrame:
 
     # Fetch sequences in batches
     all_rows = []
-    batch_size = 50
+    batch_size = 20
     for i in range(0, len(id_list), batch_size):
         batch = id_list[i : i + batch_size]
         rows = fetch_ncbi_fasta(batch)
         all_rows.extend(rows)
         log.info(f"  Fetched batch {i//batch_size + 1}: {len(rows)} sequences")
-        time.sleep(REQUEST_PAUSE)
+        time.sleep(NCBI_REQUEST_PAUSE)
 
     # Scan fetched sequences for motifs to identify binding candidates
     for row in all_rows:
