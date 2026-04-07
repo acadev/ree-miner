@@ -556,7 +556,7 @@ def run_strategy_C() -> pd.DataFrame:
 
     # Fetch sequences in batches
     all_rows = []
-    batch_size = 20
+    batch_size = 20 # Reduced from 50 to reduce chances of IncompleteRead error
     for i in range(0, len(id_list), batch_size):
         batch = id_list[i : i + batch_size]
         rows = fetch_ncbi_fasta(batch)
