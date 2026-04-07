@@ -44,6 +44,9 @@ import requests
 from Bio import Entrez, SeqIO
 from Bio.Align import PairwiseAligner
 
+from io import StringIO
+from http.client import IncompleteRead
+
 from ree_miner._workspace import DATA_DIR, LOG_DIR
 logging.basicConfig(
     level=logging.INFO,
@@ -60,6 +63,7 @@ Entrez.email = "user@example.com"   # required by NCBI
 UNIPROT_SEARCH_URL = "https://rest.uniprot.org/uniprotkb/search"
 UNIPROT_FASTA_URL  = "https://rest.uniprot.org/uniprotkb/{acc}.fasta"
 REQUEST_PAUSE      = 0.2
+NCBI_REQUEST_PAUSE = 0.4 # NCBI pause - stays safely under 3 req/sec limit
 
 # ─── Sequence motifs ─────────────────────────────────────────────────────────
 # DYD motif: the Asp-Tyr-Asp triad in REE-dependent MDHs absent from Ca2+ MDHs.
@@ -253,10 +257,10 @@ def search_uniprot(query: str, max_results: int = 500) -> list[dict]:
                         candidate = corrected
                         reconstructed = True
                     next_url = candidate
-            # ───────────────────────────────
+            # ─────────────────────────────────────────────────────────────────
             
             url = next_url
-            params = None  # params only for first request
+            params = None  # params only needed for the first request
             time.sleep(REQUEST_PAUSE)
         except Exception as e:
             log.warning(f"UniProt query failed: {e}")
@@ -455,34 +459,65 @@ def search_ncbi_protein(query: str, max_results: int = 200) -> list[str]:
         handle = Entrez.esearch(db="protein", term=query, retmax=max_results)
         record = Entrez.read(handle)
         handle.close()
+        time.sleep(NCBI_REQUEST_PAUSE) # stay under NCBI 3 req/sec limit
         return record.get("IdList", [])
     except Exception as e:
         log.warning(f"NCBI search failed: {e}")
         return []
 
 
-def fetch_ncbi_fasta(id_list: list[str]) -> list[dict]:
-    """Fetch FASTA sequences from NCBI for a list of protein IDs."""
+def fetch_ncbi_fasta(id_list: list[str], max_retries: int = 3) -> list[dict]:
+    """Fetch GenBank sequences from NCBI for a list of protein IDs."""
     if not id_list:
         return []
     rows = []
-    try:
-        handle = Entrez.efetch(db="protein", id=",".join(id_list),
-                               rettype="gb", retmode="text")
-        for record in SeqIO.parse(handle, "genbank"):
-            rows.append({
-                "ncbi_acc":    record.id,
-                "description": record.description,
-                "organism":    record.annotations.get("organism", ""),
-                "sequence":    str(record.seq),
-                "seq_len":     len(record.seq),
-                "source":      "ncbi_mll_cluster",
-                "query_label": "mll_cluster",
-            })
-        handle.close()
-    except Exception as e:
-        log.warning(f"NCBI fetch failed: {e}")
+    log.info(f"  Fetching {len(id_list)} IDs from NCBI, sample: {id_list[:3]}")
+    for attempt in range(max_retries):
+        raw = None
+        error = None
+        error_raw = None
+        handle = None
+        try:
+            handle = Entrez.efetch(db="protein", id=",".join(id_list),
+                                   rettype="gb", retmode="text")
+            raw = handle.read()
+            if not raw.strip():
+                raise ValueError("Empty response from NCBI")
+            for record in SeqIO.parse(StringIO(raw), "genbank"):
+                rows.append({
+                    "ncbi_acc":    record.id,
+                    "description": record.description,
+                    "organism":    record.annotations.get("organism", ""),
+                    "sequence":    str(record.seq),
+                    "seq_len":     len(record.seq),
+                    "source":      "ncbi_mll_cluster",
+                    "query_label": "mll_cluster",
+                })
+        except Exception as e:
+            # If NCBI dropped the connection mid-transfer, log the partial
+            # bytes raw so we can inspect what was actually returned
+            if isinstance(e, IncompleteRead) and e.partial:
+                error_raw = e.partial.decode("utf-8", errors="ignore")
+            error = e
+        finally:
+            if handle is not None:
+                handle.close()
+
+        # Log outside try/except so output is never swallowed by the except handler
+        if raw is not None:
+            log.info(f"  Raw response length: {len(raw)} bytes") #, preview: {raw[:200]!r}")
+        if error_raw is not None:
+            log.warning(f"  Partial response ({len(error_raw)} bytes): {error_raw!r}")
+        if error is None:
+            break  # fetch succeeded, stop retrying
+        wait = 2 ** attempt
+        log.warning(f"NCBI fetch failed (attempt {attempt + 1}/{max_retries}): {error} — retrying in {wait}s")
+        time.sleep(wait)
+        if attempt == max_retries - 1:
+            log.warning(f"NCBI fetch gave up after {max_retries} attempts for {len(id_list)} IDs")
+
     return rows
+
 
 
 def run_strategy_C() -> pd.DataFrame:
