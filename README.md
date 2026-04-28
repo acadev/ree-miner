@@ -23,7 +23,7 @@ metagenomic dataset (~5.7 million SRA experiments, billions of contigs).
 | `homologs` | UniProt REST + motif-scan based homolog discovery across proteomes |
 | `datasets` | Sequence clustering (30 % identity), label assignment, ESM-Bind JSON export |
 | `engineering` | CaM-family EF-hand loop extraction and D→P REE-selectivity mutant design |
-| `cofactors` | Cofactor / prosthetic-group architecture catalog (C2, Annexin, EGF-Ca², Gla, Cadherin) |
+<!-- | `cofactors` | Cofactor / prosthetic-group architecture catalog (C2, Annexin, EGF-Ca², Gla, Cadherin) |  # Removing this for now --> 
 | `metagenomic` | Logan S3 metagenome scan with pyhmmer profile HMMs + SLURM array job generation |
 
 ---
@@ -60,9 +60,9 @@ ree-miner test
 ree-miner mine                   # PDB mining
 ree-miner classify               # architecture annotation
 ree-miner find-homologs          # UniProt search + motif scan
-ree-miner build-dataset          # cluster, label, export
 ree-miner engineer               # CaM EF-hand engineering
-ree-miner cofactors              # cofactor architecture catalog
+ree-miner build-dataset          # cluster, label, export
+<!-- ree-miner cofactors              # cofactor architecture catalog # Remove this for now -->
 
 # Metagenome scan
 ree-miner scan --mode build-hmms        # download Pfam + build custom HMMs
