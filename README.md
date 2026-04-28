@@ -64,13 +64,15 @@ ree-miner classify               # architecture annotation
 ree-miner find-homologs          # UniProt search + motif scan
 ree-miner engineer               # CaM EF-hand engineering
 ree-miner build-dataset          # cluster, label, export
-<!-- ree-miner cofactors              # cofactor architecture catalog # Remove this for now -->
+
 
 # Metagenome scan
 ree-miner scan --mode build-hmms        # download Pfam + build custom HMMs
 ree-miner scan --mode generate-slurm   # write SLURM array scripts
 ree-miner scan --mode offline-test     # smoke test without S3 access
 ```
+<!-- ree-miner cofactors              # cofactor architecture catalog # Remove this for now -->
+
 
 ### Custom workspace
 
