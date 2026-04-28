@@ -23,10 +23,12 @@ metagenomic dataset (~5.7 million SRA experiments, billions of contigs).
 | `homologs` | UniProt REST + motif-scan based homolog discovery across proteomes |
 | `datasets` | Sequence clustering (30 % identity), label assignment, ESM-Bind JSON export |
 | `engineering` | CaM-family EF-hand loop extraction and D→P REE-selectivity mutant design |
-<!-- | `cofactors` | Cofactor / prosthetic-group architecture catalog (C2, Annexin, EGF-Ca², Gla, Cadherin) |  # Removing this for now --> 
 | `metagenomic` | Logan S3 metagenome scan with pyhmmer profile HMMs + SLURM array job generation |
 
 ---
+<!-- | `cofactors` | Cofactor / prosthetic-group architecture catalog (C2, Annexin, EGF-Ca², Gla, Cadherin) |  # Removing this for now --> 
+
+
 
 ## Installation
 
