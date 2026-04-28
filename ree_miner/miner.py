@@ -445,7 +445,7 @@ def mine_all_ree_structures(test_mode: bool = False) -> pd.DataFrame:
         summary = (
             contacts_df.groupby(["pdb_id", "metal_code", "metal_name", "metal_type"])
             .agg(
-                n_binding_residues=("binding_residue_1l", "count"),
+                n_binding_residues=("binding_seqnum", lambda x: x.nunique()),
                 unique_binding_residues=("binding_residue_1l", lambda x: ",".join(sorted(set(x)))),
                 unique_binding_atoms=("binding_atom", lambda x: ",".join(sorted(set(x)))),
                 avg_coordination_number=("coordination_number", "mean"),

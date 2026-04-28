@@ -28,6 +28,9 @@ Usage:
 import json
 import logging
 import math
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -133,32 +136,209 @@ def compute_sequence_identity(seq_a: str, seq_b: str) -> float:
             return 0.0
         return len(k_a & k_b) / len(k_a | k_b)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. SEQUENCE CLUSTERING
+#    Two backends, chosen automatically:
+#      • MMseqs2  — used when the `mmseqs` binary is on PATH and n > MMSEQS_THRESHOLD
+#      • Greedy   — pure-Python fallback, O(n²), fine up to ~2 000 sequences
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def cluster_sequences(df: pd.DataFrame, identity_threshold: float = 0.30,
-                       seq_col: str = "sequence") -> pd.DataFrame:
-    """
-    Greedy sequence clustering at `identity_threshold` (default 30%).
-    Each sequence is either a cluster representative or assigned to the
-    nearest cluster it exceeds the threshold with.
+# Switch to MMseqs2 automatically once the dataset exceeds this size.
+MMSEQS_THRESHOLD = 500
 
-    Adds columns: cluster_id, is_representative.
-    Performance note: O(n^2) — acceptable for datasets up to ~2000 sequences.
-    For larger sets, use MMseqs2 or pre-filter by length.
+
+def _mmseqs2_available() -> bool:
+    """Return True if the `mmseqs` binary can be found on PATH."""
+    return shutil.which("mmseqs") is not None
+
+
+def cluster_sequences_mmseqs2(
+    df: pd.DataFrame,
+    identity_threshold: float = 0.30,
+    seq_col: str = "sequence",
+    threads: int = 4,          # 0 → let MMseqs2 use all available cores
+    coverage: float = 0.80,    # minimum alignment coverage of the shorter sequence
+    sensitivity: float = 7.5,  # MMseqs2 -s; higher = more sensitive, slower
+) -> pd.DataFrame:
     """
+    Cluster sequences using MMseqs2 ``easy-cluster``.
+
+    Writes a temporary FASTA, runs MMseqs2, parses the ``*_cluster.tsv``
+    output, then maps representative IDs back to the original DataFrame index.
+
+    Adds the same two columns as the greedy fallback so callers are unaffected:
+      • cluster_id        — integer index of the cluster representative row
+      • is_representative — True for exactly one row per cluster
+
+    Parameters
+    ----------
+    df                 : DataFrame that must contain *seq_col*.
+    identity_threshold : Minimum sequence identity (0–1). Passed to MMseqs2
+                         as ``--min-seq-id``.
+    seq_col            : Name of the sequence column.
+    threads            : CPU threads for MMseqs2 (0 = all cores).
+    coverage           : ``-c`` coverage threshold for MMseqs2.
+    sensitivity        : ``-s`` sensitivity preset for MMseqs2.
+
+    Returns
+    -------
+    A copy of *df* with ``cluster_id`` and ``is_representative`` columns added.
+
+    Raises
+    ------
+    RuntimeError  if MMseqs2 exits with a non-zero return code.
+    """
+    import subprocess, tempfile
+
     seqs = df[seq_col].tolist()
     n = len(seqs)
-    log.info(f"Clustering {n} sequences at {identity_threshold*100:.0f}% identity ...")
+    log.info(
+        f"MMseqs2 clustering {n} sequences at "
+        f"{identity_threshold * 100:.0f}% identity, {threads or 'all'} threads …"
+    )
 
-    representatives = []   # (rep_idx, rep_seq)
+    with tempfile.TemporaryDirectory(prefix="ree_mmseqs_") as tmpdir:
+        tmp = Path(tmpdir)
+        fasta_path   = tmp / "input.fasta"
+        result_prefix = tmp / "clusters"
+        mmseqs_tmp   = tmp / "mmseqs_tmp"
+        mmseqs_tmp.mkdir()
+
+        # ── Write FASTA — use row index as the sequence ID so we can map back ──
+        with fasta_path.open("w") as fh:
+            for idx, seq in enumerate(seqs):
+                fh.write(f">{idx}\n{seq}\n")
+
+        # ── Run MMseqs2 easy-cluster ──────────────────────────────────────────
+        cmd = [
+            "mmseqs", "easy-cluster",
+            str(fasta_path),          # input FASTA
+            str(result_prefix),       # output prefix  → clusters_cluster.tsv
+            str(mmseqs_tmp),          # temp dir
+            "--min-seq-id", str(identity_threshold),
+            "-c",           str(coverage),
+            "-s",           str(sensitivity),
+            "--threads",    str(threads),
+            "--cov-mode",   "1",   # coverage of the shorter sequence
+            "--cluster-reassign", "1",   # reassign borderline members for tighter clusters
+            "-v", "1",     # minimal verbosity — we log ourselves
+        ]
+        log.info("MMseqs2 command: " + " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            # Surface MMseqs2 stderr so the user can diagnose the problem.
+            raise RuntimeError(
+                f"MMseqs2 failed (exit {result.returncode}):\n{result.stderr.strip()}"
+            )
+
+        # ── Parse cluster TSV: columns are (representative_id, member_id) ────
+        # MMseqs2 writes one line per member; the representative is listed as
+        # its own member, so every row index appears exactly once as a member.
+        tsv_path = tmp / "clusters_cluster.tsv"
+        if not tsv_path.exists():
+            raise RuntimeError(
+                f"Expected MMseqs2 output not found: {tsv_path}\n"
+                f"stdout: {result.stdout[:500]}"
+            )
+
+        rep_of: dict[int, int] = {}   # member_idx → representative_idx
+        with tsv_path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rep_str, mem_str = line.split("\t")
+                rep_of[int(mem_str)] = int(rep_str)
+
+        # ── Build output columns ──────────────────────────────────────────────
+        cluster_id      = [rep_of.get(i, i) for i in range(n)]
+        is_representative = [cluster_id[i] == i for i in range(n)]
+
+    n_clusters = len(set(cluster_id))
+    log.info(f"MMseqs2 clustering complete: {n} sequences → {n_clusters} clusters")
+
+    out = df.copy()
+    out["cluster_id"]       = cluster_id
+    out["is_representative"] = is_representative
+    return out
+
+
+def compute_sequence_identity(seq_a: str, seq_b: str) -> float:
+    """
+    Compute pairwise sequence identity using global alignment (BLOSUM62).
+    Returns fraction [0, 1]. Uses shorter sequence as denominator.
+    """
+    if not seq_a or not seq_b:
+        return 0.0
+    # Use local alignment for speed on long sequences
+    try:
+        alns = pairwise2.align.globalds(
+            seq_a[:500], seq_b[:500],   # cap at 500aa for performance
+            BLOSUM62, -10, -0.5,
+            score_only=False, one_alignment_only=True,
+        )
+        if not alns:
+            return 0.0
+        aln = alns[0]
+        aligned_a, aligned_b = aln.seqA, aln.seqB
+        matches = sum(a == b and a != "-" for a, b in zip(aligned_a, aligned_b))
+        aln_len = sum(1 for a, b in zip(aligned_a, aligned_b) if a != "-" or b != "-")
+        return matches / max(aln_len, 1)
+    except Exception:
+        # Fallback: k-mer based identity estimate
+        k = 3
+        def kmers(s): return set(s[i:i+k] for i in range(len(s)-k+1))
+        k_a, k_b = kmers(seq_a), kmers(seq_b)
+        if not k_a or not k_b:
+            return 0.0
+        return len(k_a & k_b) / len(k_a | k_b)
+
+
+def cluster_sequences(
+    df: pd.DataFrame,
+    identity_threshold: float = 0.30,
+    seq_col: str = "sequence",
+    force_mmseqs2: bool = False,
+    force_greedy: bool = False,
+) -> pd.DataFrame:
+    """
+    Cluster sequences at *identity_threshold* (default 30 %).
+
+    Backend selection (override with *force_mmseqs2* / *force_greedy*):
+      • MMseqs2  — if ``mmseqs`` is on PATH AND n > MMSEQS_THRESHOLD (or forced)
+      • Greedy   — O(n²) pure-Python fallback for small datasets or offline use
+
+    Adds columns: cluster_id, is_representative.
+    """
+    n = len(df)
+
+    use_mmseqs2 = (
+        force_mmseqs2
+        or (not force_greedy and n > MMSEQS_THRESHOLD and _mmseqs2_available())
+    )
+
+    if use_mmseqs2:
+        log.info(f"Dispatching to MMseqs2 backend (n={n})")
+        return cluster_sequences_mmseqs2(df, identity_threshold=identity_threshold,
+                                         seq_col=seq_col)
+
+    # ── Greedy fallback ───────────────────────────────────────────────────────
+    log.info(
+        f"Greedy clustering {n} sequences at {identity_threshold * 100:.0f}% identity "
+        f"({'MMseqs2 not found' if not _mmseqs2_available() else f'n ≤ {MMSEQS_THRESHOLD}'}) …"
+    )
+    seqs = df[seq_col].tolist()
+    representatives: list[tuple[int, str]] = []   # (rep_idx, rep_seq)
     cluster_id = [-1] * n
 
     for i, seq in enumerate(seqs):
         assigned = False
         for rep_idx, rep_seq in representatives:
+            # Skip obviously different lengths before running alignment
             if abs(len(seq) - len(rep_seq)) / max(len(rep_seq), 1) > 0.5:
-                continue  # skip obviously different lengths
-            identity = compute_sequence_identity(seq, rep_seq)
-            if identity >= identity_threshold:
+                continue
+            if compute_sequence_identity(seq, rep_seq) >= identity_threshold:
                 cluster_id[i] = rep_idx
                 assigned = True
                 break
@@ -169,11 +349,52 @@ def cluster_sequences(df: pd.DataFrame, identity_threshold: float = 0.30,
         if (i + 1) % 100 == 0:
             log.info(f"  {i+1}/{n} clustered, {len(representatives)} clusters so far")
 
-    df = df.copy()
-    df["cluster_id"] = cluster_id
-    df["is_representative"] = [cid == i for i, cid in enumerate(cluster_id)]
-    log.info(f"Clustering complete: {n} sequences → {len(representatives)} clusters")
-    return df
+    out = df.copy()
+    out["cluster_id"]       = cluster_id
+    out["is_representative"] = [cid == i for i, cid in enumerate(cluster_id)]
+    log.info(f"Greedy clustering complete: {n} sequences → {len(representatives)} clusters")
+    return out
+
+#def cluster_sequences(df: pd.DataFrame, identity_threshold: float = 0.30,
+#                       seq_col: str = "sequence") -> pd.DataFrame:
+    """
+    Greedy sequence clustering at `identity_threshold` (default 30%).
+    Each sequence is either a cluster representative or assigned to the
+    nearest cluster it exceeds the threshold with.
+
+    Adds columns: cluster_id, is_representative.
+    Performance note: O(n^2) — acceptable for datasets up to ~2000 sequences.
+    For larger sets, use MMseqs2 or pre-filter by length.
+    """
+#    seqs = df[seq_col].tolist()
+#    n = len(seqs)
+#    log.info(f"Clustering {n} sequences at {identity_threshold*100:.0f}% identity ...")
+
+#    representatives = []   # (rep_idx, rep_seq)
+#    cluster_id = [-1] * n
+
+#    for i, seq in enumerate(seqs):
+#        assigned = False
+#        for rep_idx, rep_seq in representatives:
+#            if abs(len(seq) - len(rep_seq)) / max(len(rep_seq), 1) > 0.5:
+#                continue  # skip obviously different lengths
+#            identity = compute_sequence_identity(seq, rep_seq)
+#            if identity >= identity_threshold:
+#                cluster_id[i] = rep_idx
+#                assigned = True
+#                break
+#        if not assigned:
+#            representatives.append((i, seq))
+#            cluster_id[i] = i
+
+#        if (i + 1) % 100 == 0:
+#            log.info(f"  {i+1}/{n} clustered, {len(representatives)} clusters so far")
+
+#    df = df.copy()
+#    df["cluster_id"] = cluster_id
+#    df["is_representative"] = [cid == i for i, cid in enumerate(cluster_id)]
+#    log.info(f"Clustering complete: {n} sequences → {len(representatives)} clusters")
+#    return df
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

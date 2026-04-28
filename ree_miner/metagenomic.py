@@ -166,6 +166,7 @@ LOGAN_S3_BUCKET      = "logan-pub"
 LOGAN_CONTIG_PREFIX  = "c"   # s3://logan-pub/c/{ACC}/{ACC}.contigs.fa.zst
 LOGAN_UNITIG_PREFIX  = "u"   # s3://logan-pub/u/{ACC}/{ACC}.unitigs.fa.zst
 LOGAN_STATS_KEY      = "stats/logan-seqstats.parquet"  # per-accession stats (replaces manifest)
+LOGAN_PARQUET_CACHE  = DATA_DIR / "logan-seqstats.parquet" # cache the parquet file to avoid re-downloading it repeatedly
 # NCBI Entrez API (no key needed for ≤3 req/s; set NCBI_API_KEY env var for 10/s)
 NCBI_ENTREZ_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 NCBI_RATE_LIMIT_DELAY = 0.34  # seconds between requests (3/sec without API key)
@@ -538,15 +539,24 @@ def get_logan_manifest(
         return []
 
     try:
-        s3 = boto3.client(
-            "s3",
-            region_name="us-east-1",
-            config=Config(signature_version=UNSIGNED),
-        )
+        # ── Parquet cache check ───────────────────────────────────────────────
+        # The parquet is ~200 MB; skip re-downloading if it's already on disk.
+        if LOGAN_PARQUET_CACHE.exists():
+            log.info(f"Logan stats parquet already cached at {LOGAN_PARQUET_CACHE.name} — skipping download")
+            parquet_bytes = LOGAN_PARQUET_CACHE.read_bytes()
+        else:
+            s3 = boto3.client(
+                "s3",
+                region_name="us-east-1",
+                config=Config(signature_version=UNSIGNED),
+            )
+            log.info(f"Downloading Logan stats parquet: s3://{LOGAN_S3_BUCKET}/{LOGAN_STATS_KEY}")
+            obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=LOGAN_STATS_KEY)
+            parquet_bytes = obj["Body"].read()
 
-        log.info(f"Downloading Logan stats parquet: s3://{LOGAN_S3_BUCKET}/{LOGAN_STATS_KEY}")
-        obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=LOGAN_STATS_KEY)
-        parquet_bytes = obj["Body"].read()
+            # Save to disk so the next call skips the download entirely
+            LOGAN_PARQUET_CACHE.write_bytes(parquet_bytes)
+            log.info(f"  Cached parquet → {LOGAN_PARQUET_CACHE.name}")
 
         stats_df = pd.read_parquet(io.BytesIO(parquet_bytes))
         log.info(f"  Stats parquet: {len(stats_df):,} accessions, "
@@ -573,6 +583,41 @@ def get_logan_manifest(
     except Exception as e:
         log.error(f"Could not download Logan stats parquet: {e}")
         return []
+#        s3 = boto3.client(
+#            "s3",
+#            region_name="us-east-1",
+#            config=Config(signature_version=UNSIGNED),
+#        )
+
+#        log.info(f"Downloading Logan stats parquet: s3://{LOGAN_S3_BUCKET}/{LOGAN_STATS_KEY}")
+#        obj = s3.get_object(Bucket=LOGAN_S3_BUCKET, Key=LOGAN_STATS_KEY)
+#        parquet_bytes = obj["Body"].read()
+
+#        stats_df = pd.read_parquet(io.BytesIO(parquet_bytes))
+#        log.info(f"  Stats parquet: {len(stats_df):,} accessions, "
+#                 f"columns: {list(stats_df.columns)}")
+
+        # Filter: minimum contig count (skip nearly-empty assemblies)
+#        if min_contigs > 0 and "seqstats_contigs_nbseq" in stats_df.columns:
+#            before = len(stats_df)
+#            stats_df = stats_df[stats_df["seqstats_contigs_nbseq"] >= min_contigs]
+#            log.info(f"  After min_contigs={min_contigs} filter: "
+#                     f"{before:,} → {len(stats_df):,} accessions")
+
+        # Optionally restrict to a pre-defined accession set
+#        if filter_accessions:
+#            acc_set = set(filter_accessions)
+#            stats_df = stats_df[stats_df["accession"].isin(acc_set)]
+#            log.info(f"  After BioProject filter: {len(stats_df):,} accessions")
+
+#        accessions = stats_df["accession"].dropna().tolist()
+#        cache_path.write_text("\n".join(accessions))
+#        log.info(f"Logan manifest: {len(accessions):,} accessions → cached to {cache_path.name}")
+#        return accessions
+
+#    except Exception as e:
+#        log.error(f"Could not download Logan stats parquet: {e}")
+#        return []
 
 
 def get_bioproject_accessions(
